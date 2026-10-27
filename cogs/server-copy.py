@@ -35,7 +35,7 @@ class ConfirmView(discord.ui.View):
     @discord.ui.button(label="実行する", style=discord.ButtonStyle.danger)
     async def ok(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.value = True
-        await interaction.response.edit_message(content="コピーを開始します…", view=None)
+        await interaction.response.edit_message(content="コピーしています…", view=None)
         self.stop()
 
     @discord.ui.button(label="キャンセル", style=discord.ButtonStyle.secondary)
@@ -274,7 +274,7 @@ class ServerCopy(commands.Cog):
         await interaction.response.send_message(
             f"**{src.name}** → **{dst.name}** へコピーします。\n"
             f"対象: {' / '.join(targets)}\n"
-            "※既存のものは削除せず、追加のみ行います。よろしいですか?",
+            "できるだけロールを最上位に配置してください。BOTのロールより上のロールがコピーされない場合があります\n※既存のものは削除せず、追加のみ行います。よろしいですか?",
             view=view,
             ephemeral=True,
         )
