@@ -274,7 +274,7 @@ class ServerCopy(commands.Cog):
         await interaction.response.send_message(
             f"**{src.name}** → **{dst.name}** へコピーします。\n"
             f"対象: {' / '.join(targets)}\n"
-            "できるだけロールを最上位に配置してください。BOTのロールより上のロールがコピーされない場合があります\n※既存のものは削除せず、追加のみ行います。よろしいですか?",
+            "できるだけBOTのロールを最上位に配置してください。BOTのロールより上のロールがコピーされない場合があります\n※既存のものは削除せず、追加のみ行います。よろしいですか?",
             view=view,
             ephemeral=True,
         )
