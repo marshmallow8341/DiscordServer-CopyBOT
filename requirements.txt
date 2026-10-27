@@ -1,2 +1,2 @@
-discord.py
+discord.py>=2.6
 python-dotenv
