@@ -13,6 +13,16 @@ STICKER_EXT = {
 }
 
 
+def _reason(e: Exception) -> str:
+    """失敗理由を短い日本語の説明にする"""
+    if isinstance(e, discord.Forbidden):
+        return "権限不足(BOTの権限・ロール位置を確認)"
+    if isinstance(e, discord.HTTPException):
+        text = (e.text or "").replace("\n", " ")
+        return f"HTTP {e.status} / code {e.code}: {text}"[:120]
+    return f"{type(e).__name__}: {e}"[:120]
+
+
 class ConfirmView(discord.ui.View):
     def __init__(self, author_id: int):
         super().__init__(timeout=60)
@@ -50,7 +60,8 @@ class ServerCopy(commands.Cog):
 
     # ---------- 各コピー処理 ----------
     async def _copy_roles(self, src: discord.Guild, dst: discord.Guild, role_map: dict):
-        ok = ng = 0
+        ok = 0
+        fails: list[str] = []
         role_map[src.default_role.id] = dst.default_role
         for role in reversed(src.roles):  # 下位から作成
             if role.is_default() or role.managed:
@@ -66,10 +77,10 @@ class ServerCopy(commands.Cog):
                 )
                 role_map[role.id] = new
                 ok += 1
-            except discord.HTTPException:
-                ng += 1
+            except Exception as e:
+                fails.append(f"{role.name}: {_reason(e)}")
             await asyncio.sleep(1)
-        return ok, ng
+        return ok, fails
 
     def _convert_overwrites(self, overwrites, role_map: dict):
         result = {}
@@ -79,7 +90,8 @@ class ServerCopy(commands.Cog):
         return result
 
     async def _copy_channels(self, src: discord.Guild, dst: discord.Guild, role_map: dict):
-        ok = ng = 0
+        ok = 0
+        fails: list[str] = []
         cat_map: dict[int, discord.CategoryChannel] = {}
 
         # カテゴリ
@@ -92,8 +104,8 @@ class ServerCopy(commands.Cog):
                 )
                 cat_map[cat.id] = new
                 ok += 1
-            except discord.HTTPException:
-                ng += 1
+            except Exception as e:
+                fails.append(f"カテゴリ {cat.name}: {_reason(e)}")
             await asyncio.sleep(1)
 
         # チャンネル(position順)
@@ -141,17 +153,18 @@ class ServerCopy(commands.Cog):
                 else:
                     continue
                 ok += 1
-            except discord.HTTPException:
-                ng += 1
+            except Exception as e:
+                fails.append(f"#{ch.name}: {_reason(e)}")
             await asyncio.sleep(1)
-        return ok, ng
+        return ok, fails
 
     async def _copy_emojis(self, src: discord.Guild, dst: discord.Guild):
-        ok = ng = 0
+        ok = 0
+        fails: list[str] = []
         free = dst.emoji_limit - len(dst.emojis)
         for emoji in src.emojis:
             if free <= 0:
-                ng += 1
+                fails.append(f":{emoji.name}: コピー先の絵文字スロットが上限です")
                 continue
             try:
                 data = await emoji.read()
@@ -160,17 +173,18 @@ class ServerCopy(commands.Cog):
                 )
                 ok += 1
                 free -= 1
-            except discord.HTTPException:
-                ng += 1
+            except Exception as e:
+                fails.append(f":{emoji.name}: {_reason(e)}")
             await asyncio.sleep(2)
-        return ok, ng
+        return ok, fails
 
     async def _copy_stickers(self, src: discord.Guild, dst: discord.Guild):
-        ok = ng = 0
+        ok = 0
+        fails: list[str] = []
         free = dst.sticker_limit - len(dst.stickers)
         for st in src.stickers:
             if free <= 0:
-                ng += 1
+                fails.append(f"{st.name}: コピー先のスタンプスロットが上限です")
                 continue
             try:
                 data = await st.read()
@@ -184,10 +198,10 @@ class ServerCopy(commands.Cog):
                 )
                 ok += 1
                 free -= 1
-            except discord.HTTPException:
-                ng += 1
+            except Exception as e:
+                fails.append(f"{st.name}: {_reason(e)}")
             await asyncio.sleep(2)
-        return ok, ng
+        return ok, fails
 
     # ---------- コマンド ----------
     @app_commands.command(
@@ -273,42 +287,76 @@ class ServerCopy(commands.Cog):
         try:
             role_map: dict = {}
             if roles:
-                ok, ng = await self._copy_roles(src, dst, role_map)
-                report.append(f"ロール: 成功 {ok} / 失敗 {ng}")
+                ok, fails = await self._copy_roles(src, dst, role_map)
+                report.append(("ロール", ok, fails))
             if channels:
                 if not role_map:
                     role_map[src.default_role.id] = dst.default_role
-                ok, ng = await self._copy_channels(src, dst, role_map)
-                report.append(f"チャンネル: 成功 {ok} / 失敗 {ng}")
+                ok, fails = await self._copy_channels(src, dst, role_map)
+                report.append(("チャンネル", ok, fails))
             if emojis:
-                ok, ng = await self._copy_emojis(src, dst)
-                report.append(f"絵文字: 成功 {ok} / 失敗 {ng}")
+                ok, fails = await self._copy_emojis(src, dst)
+                report.append(("絵文字", ok, fails))
             if stickers:
-                ok, ng = await self._copy_stickers(src, dst)
-                report.append(f"スタンプ: 成功 {ok} / 失敗 {ng}")
+                ok, fails = await self._copy_stickers(src, dst)
+                report.append(("スタンプ", ok, fails))
         finally:
             self.running.discard(dst.id)
 
-        layout = self._result_view(src, dst, report)
-        try:
-            await interaction.followup.send(view=layout, ephemeral=True)
-        except discord.HTTPException:
-            # 15分を超えてトークンが失効した場合
-            await interaction.channel.send(view=layout)
+        layouts = self._result_views(src, dst, report)
+        for layout in layouts:
+            try:
+                await interaction.followup.send(view=layout, ephemeral=True)
+            except discord.HTTPException:
+                # 15分を超えてトークンが失効した場合
+                await interaction.channel.send(view=layout)
 
-    def _result_view(self, src: discord.Guild, dst: discord.Guild, report: list[str]):
-        layout = discord.ui.LayoutView()
-        container = discord.ui.Container(accent_colour=discord.Colour.green())
-        container.add_item(discord.ui.TextDisplay("## ✅ サーバーコピー完了"))
-        container.add_item(discord.ui.Separator())
-        container.add_item(
-            discord.ui.TextDisplay(f"**{src.name}** → **{dst.name}**")
-        )
-        container.add_item(
-            discord.ui.TextDisplay("\n".join(f"- {line}" for line in report))
-        )
-        layout.add_item(container)
-        return layout
+    def _result_views(self, src: discord.Guild, dst: discord.Guild, report: list):
+        """失敗を全件表示する。文字数上限を超える分は複数メッセージに分割する"""
+        total_fail = sum(len(f) for _, _, f in report)
+
+        # 全行をフラットに並べる
+        lines: list[str] = []
+        for label, ok, fails in report:
+            lines.append(f"**{label}**: 成功 {ok} / 失敗 {len(fails)}")
+            for f in fails:
+                lines.append(f"- ❌ {f}"[:300])
+
+        # 1メッセージあたりの本文を3000字以内に分割
+        chunks: list[list[str]] = [[]]
+        size = 0
+        for line in lines:
+            if size + len(line) + 1 > 3000 and chunks[-1]:
+                chunks.append([])
+                size = 0
+            chunks[-1].append(line)
+            size += len(line) + 1
+
+        colour = discord.Colour.orange() if total_fail else discord.Colour.green()
+        layouts = []
+        for i, chunk in enumerate(chunks):
+            layout = discord.ui.LayoutView()
+            container = discord.ui.Container(accent_colour=colour)
+            if i == 0:
+                title = (
+                    "## ⚠️ サーバーコピー完了(一部失敗)"
+                    if total_fail
+                    else "## ✅ サーバーコピー完了"
+                )
+                container.add_item(discord.ui.TextDisplay(title))
+                container.add_item(discord.ui.Separator())
+                container.add_item(
+                    discord.ui.TextDisplay(f"**{src.name}** → **{dst.name}**")
+                )
+            else:
+                container.add_item(
+                    discord.ui.TextDisplay(f"## 続き ({i + 1}/{len(chunks)})")
+                )
+                container.add_item(discord.ui.Separator())
+            container.add_item(discord.ui.TextDisplay("\n".join(chunk)))
+            layout.add_item(container)
+            layouts.append(layout)
+        return layouts
 
 
 async def setup(bot: commands.Bot):
