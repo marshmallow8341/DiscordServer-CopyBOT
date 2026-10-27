@@ -13,7 +13,7 @@ except ImportError:
     pass
 
 COGS = [
-    "cogs.server_copy",
+    "cogs.server-copy",
 ]
 
 logging.basicConfig(level=logging.INFO)
